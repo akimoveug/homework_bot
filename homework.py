@@ -58,8 +58,6 @@ def check_tokens():
                     f'отсутсвует обязательная переменная окружения {token}.'
                     ' Программа принудительно остановлена. '
                 )
-
-
     except Exception as error:
         logger.critical(f'Сбой в работе программы: {error}')
         sys.exit()

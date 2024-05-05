@@ -38,7 +38,7 @@ HOMEWORK_STATUS_KEY = 'status'
 
 CHECK_TOKENS_ERROR = ('Отсутствуют переменные окружения {tokens}. '
                       'Программа принудительно остановлена.')
-API_ERROR = 'ошибка запроса к API: {detail_info}'
+API_ERROR = 'ошибка запроса к API: {code}, {error}'
 API_ERROR2 = 'API Практикума недоступно. Ошибка {code}. Запрос к {url}'
 RESPONSE_TYPE_ERROR = 'в ответе пришел не словарь, а {type}'
 NO_HOMEWORKS_IN_RESPONSE_ERROR = (
@@ -84,7 +84,12 @@ def get_api_answer(timestamp):
     except requests.exceptions.RequestException as error:
         raise ValueError(API_ERROR.format(detail_info=error))
 
-    if response.status_code in (HTTPStatus.OK, HTTPStatus.BAD_REQUEST):
+    if response.status_code == HTTPStatus.OK:
+        json_response = response.json()
+        code = json_response.get('code')
+        error = json_response.get('error')
+        if code or error:
+            raise ValueError(API_ERROR.format(code=code, error=error))
         return response.json()
     else:
         raise KeyError(
@@ -163,14 +168,16 @@ def main():
                 message = parse_status(homeworks[0])
                 if send_message(bot, message) is True:
                     timestamp = api_response_time
-            else:
-                logger.debug(NO_NEW_STATUSES)
+            logger.debug(NO_NEW_STATUSES)
+            exception_errors.clear()
+
         except Exception as error:
             message = EXCEPTION_TEXT.format(error=error)
             logger.error(message)
             if str(error) not in exception_errors.keys():
                 exception_errors[str(error)] = 'Exception error'
                 send_message(bot, message)
+
         time.sleep(RETRY_PERIOD)
 
 

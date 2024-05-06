@@ -167,6 +167,7 @@ def main():
                 timestamp = api_answer.get('current_date', timestamp)
             else:
                 logger.debug(NO_NEW_STATUSES)
+            # Далее очищаем последнюю ошибку, если она не повторилась
             last_exception_error = ''
         except Exception as error:
             message = EXCEPTION_TEXT.format(error=error)

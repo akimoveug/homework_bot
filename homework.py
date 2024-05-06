@@ -1,12 +1,12 @@
-from http import HTTPStatus
 import logging
-from logging.handlers import RotatingFileHandler
 import os
 import sys
 import time
+from http import HTTPStatus
+from logging.handlers import RotatingFileHandler
 
-from dotenv import load_dotenv
 import requests
+from dotenv import load_dotenv
 from telebot import TeleBot
 
 
@@ -29,25 +29,24 @@ HOMEWORK_VERDICTS = {
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
 
-LOGGING_LEVEL = logging.DEBUG
 REQUIRED_TOKENS = ('TELEGRAM_TOKEN', 'PRACTICUM_TOKEN', 'TELEGRAM_CHAT_ID')
-HOMEWORKS_KEY = 'homeworks'
-HOMEWORK_NAME_KEY = 'homework_name'
-HOMEWORK_STATUS_KEY = 'status'
-
 
 CHECK_TOKENS_ERROR = ('Отсутствуют переменные окружения {tokens}. '
                       'Программа принудительно остановлена.')
-API_ERROR = 'ошибка запроса к API: {code}, {error}'
-API_ERROR2 = 'API Практикума недоступно. Ошибка {code}. Запрос к {url}'
+API_CONNECTION_ERROR = ('ошибка запроса к API: {detail_info}. '
+                        'HEADERS: {headers}. URL: {url}')
+API_ERROR = ('ошибка запроса к API: CODE: {code}, ERROR: {error}. URL: {url}, '
+             'HEADERS: {headers}, PARAMS: {params}')
+API_ERROR2 = ('API Практикума недоступно. Ошибка {code}. URL: {url}, '
+              'HEADERS: {headers}, PARAMS: {params}')
 RESPONSE_TYPE_ERROR = 'в ответе пришел не словарь, а {type}'
 NO_HOMEWORKS_IN_RESPONSE_ERROR = (
-    'в ответе отсутствует ключ homeworks. Получен ответ: {response}'
+    'в ответе отсутствует ключ homeworks. Ключи в ответе: {keys}'
 )
 HOMEWORKS_TYPE_ERROR = 'в ответе пришел не список, а {type}'
 NO_NEW_STATUSES = 'в ответе отсутствуют новые статусы'
 HOMEWORK_TYPE_ERROR = 'отдельная работа не в словаре, а в {type}'
-UNEXPECTED_HOMEWORK_KEYS = 'неожиданные ключи у работы - {keys}'
+HOMEWORK_MISSING_KEYS = 'в ответе не найдены ключи: {keys}'
 UNEXPECTED_HOMEWORK_STATUS = 'неожиданный статус у работы - {status}'
 HOMEWORK_STATUS_CHANGED_MESSAGE = (
     'Изменился статус проверки работы "{homework_name}". {status}'
@@ -67,36 +66,41 @@ def check_tokens():
     tokens_with_none_value = [
         token for token in REQUIRED_TOKENS if global_variables[token] is None
     ]
-    if len(tokens_with_none_value) > 0:
-        raise KeyError(
-            CHECK_TOKENS_ERROR.format(tokens=', '.join(tokens_with_none_value))
-        )
+    if tokens_with_none_value:
+        error_message = (CHECK_TOKENS_ERROR.format(
+            tokens=tokens_with_none_value
+        ))
+        logger.critical(error_message)
+        raise ValueError(error_message)
 
 
 def get_api_answer(timestamp):
     """Получение ответа от API."""
+    rq_pars = dict(
+        url=ENDPOINT,
+        headers=HEADERS,
+        params={'from_date': timestamp}
+    )
     try:
-        response = requests.get(
-            ENDPOINT,
-            headers=HEADERS,
-            params={'from_date': timestamp}
-        )
+        response = requests.get(**rq_pars)
     except requests.exceptions.RequestException as error:
-        raise ValueError(API_ERROR.format(detail_info=error))
-
+        raise KeyError(API_CONNECTION_ERROR.format(
+            detail_info=error,
+            headers=error.request.headers,
+            url=error.request.url)
+        )
     if response.status_code == HTTPStatus.OK:
         json_response = response.json()
         code = json_response.get('code')
         error = json_response.get('error')
         if code or error:
-            raise ValueError(API_ERROR.format(code=code, error=error))
-        return response.json()
-    else:
-        raise KeyError(
-            API_ERROR2.format(
-                code=response.status_code, url=response.request.url
-            )
-        )
+            raise ValueError(API_ERROR.format(
+                code=code,
+                error=error,
+                **rq_pars
+            ))
+        return json_response
+    raise ValueError(API_ERROR2.format(code=response.status_code, **rq_pars))
 
 
 def check_response(response):
@@ -104,39 +108,38 @@ def check_response(response):
     if not isinstance(response, dict):
         raise TypeError(RESPONSE_TYPE_ERROR.format(type=type(response)))
 
-    if HOMEWORKS_KEY not in response:
+    if 'homeworks' not in response:
         raise KeyError(
-            NO_HOMEWORKS_IN_RESPONSE_ERROR.format(response=response)
+            NO_HOMEWORKS_IN_RESPONSE_ERROR.format(keys=response.keys())
         )
 
-    homeworks = response[HOMEWORKS_KEY]
-    current_date = response.get('current_date')
+    homeworks = response['homeworks']
     if not isinstance(homeworks, list):
         raise TypeError(HOMEWORKS_TYPE_ERROR.format(type=type(homeworks)))
-    return homeworks, current_date
+    return homeworks
 
 
 def parse_status(homework):
     """Статус конкретной домашней работы."""
-    if (HOMEWORK_NAME_KEY or HOMEWORK_STATUS_KEY) not in homework.keys():
-        raise KeyError(UNEXPECTED_HOMEWORK_KEYS.format(keys=homework.keys()))
-    homework_name = homework[HOMEWORK_NAME_KEY]
-    homework_status = homework[HOMEWORK_STATUS_KEY]
-    if homework_status not in HOMEWORK_VERDICTS:
-        raise KeyError(
-            UNEXPECTED_HOMEWORK_STATUS.format(status=homework_status)
+    missing_keys = [
+        key for key in ('homework_name', 'status') if key not in homework
+    ]
+    if missing_keys:
+        raise ValueError(HOMEWORK_MISSING_KEYS.format(keys=missing_keys))
+
+    status = homework['status']
+    if status not in HOMEWORK_VERDICTS:
+        raise ValueError(
+            UNEXPECTED_HOMEWORK_STATUS.format(status=status)
         )
-    else:
-        return HOMEWORK_STATUS_CHANGED_MESSAGE.format(
-            homework_name=homework_name,
-            status=HOMEWORK_VERDICTS.get(homework_status)
-        )
+    return HOMEWORK_STATUS_CHANGED_MESSAGE.format(
+        homework_name=homework['homework_name'],
+        status=HOMEWORK_VERDICTS.get(status)
+    )
 
 
 def send_message(bot, message):
-    """Отправка сообщения в Telegram.
-    Возвращает True если сообщение отправлено.
-    """
+    """Отправка сообщения в Telegram."""
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
         logger.debug(BOT_SEND_MESSAGE.format(message=message))
@@ -145,39 +148,32 @@ def send_message(bot, message):
             BOT_SEND_MESSAGE_ERROR.format(message=message, error=error),
             exc_info=True
         )
-    return True
 
 
 def main():
     """Основная логика работы бота."""
-    logger.setLevel(LOGGING_LEVEL)
-    exception_errors = {}
-    try:
-        check_tokens()
-    except Exception as error:
-        logger.critical(error)
-        sys.exit()
+    logger.setLevel(logging.DEBUG)
+    last_exception_error = ''
+    check_tokens()
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     while True:
         try:
-            homeworks, api_response_time = check_response(
-                get_api_answer(timestamp)
-            )
+            api_answer = get_api_answer(timestamp)
+            homeworks = check_response(api_answer)
             if homeworks:
                 message = parse_status(homeworks[0])
-                if send_message(bot, message) is True:
-                    timestamp = api_response_time
-            logger.debug(NO_NEW_STATUSES)
-            exception_errors.clear()
-
+                send_message(bot, message)
+                timestamp = api_answer.get('current_date', timestamp)
+            else:
+                logger.debug(NO_NEW_STATUSES)
+            last_exception_error = ''
         except Exception as error:
             message = EXCEPTION_TEXT.format(error=error)
             logger.error(message)
-            if str(error) not in exception_errors.keys():
-                exception_errors[str(error)] = 'Exception error'
+            if str(error)[:100] != last_exception_error:
                 send_message(bot, message)
-
+                last_exception_error = str(error)[:100]
         time.sleep(RETRY_PERIOD)
 
 
@@ -185,6 +181,7 @@ if __name__ == '__main__':
     logging.basicConfig(
         format='%(asctime)s, %(levelname)s, %(funcName)s'
                ' - %(lineno)d, %(message)s',
+        level=logging.CRITICAL,
         handlers=[
             logging.StreamHandler(sys.stdout),
             RotatingFileHandler(

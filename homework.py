@@ -33,16 +33,16 @@ REQUIRED_TOKENS = ('TELEGRAM_TOKEN', 'PRACTICUM_TOKEN', 'TELEGRAM_CHAT_ID')
 
 CHECK_TOKENS_ERROR = ('Отсутствуют переменные окружения {tokens}. '
                       'Программа принудительно остановлена.')
-API_CONNECTION_ERROR = ('ошибка запроса к API: {detail_info}. '
-                        'HEADERS: {headers}. URL: {url}')
-API_ERROR = ('ошибка запроса к API: CODE: {code}, ERROR: {error}. URL: {url}, '
-             'HEADERS: {headers}, PARAMS: {params}')
-API_ERROR2 = ('API Практикума недоступно. Ошибка {code}. URL: {url}, '
-              'HEADERS: {headers}, PARAMS: {params}')
-RESPONSE_TYPE_ERROR = 'в ответе пришел не словарь, а {type}'
-NO_HOMEWORKS_IN_RESPONSE_ERROR = (
-    'в ответе отсутствует ключ homeworks. Ключи в ответе: {keys}'
+API_CONNECTION_ERROR = ('ошибка запроса к API: {detail_info}. URL: {url}, '
+                        'HEADERS: {headers}, PARAMS: {params}')
+API_ERROR = (
+    'ошибка запроса к API, в ответе найдены ключи и их значения: '
+    '{found_keys_values}. URL: {url}, HEADERS: {headers}, PARAMS: {params}'
 )
+API_RESPONSE_ERROR = ('API Практикума недоступно. Ошибка {code}. URL: {url}, '
+                      'HEADERS: {headers}, PARAMS: {params}')
+RESPONSE_TYPE_ERROR = 'в ответе пришел не словарь, а {type}'
+NO_HOMEWORKS_IN_RESPONSE_ERROR = 'в ответе отсутствует ключ homeworks.'
 HOMEWORKS_TYPE_ERROR = 'в ответе пришел не список, а {type}'
 NO_NEW_STATUSES = 'в ответе отсутствуют новые статусы'
 HOMEWORK_TYPE_ERROR = 'отдельная работа не в словаре, а в {type}'
@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 
 
 def check_tokens():
-    """Проверка токенов."""
+    """Проверка наличия токенов."""
     global_variables = globals()
     tokens_with_none_value = [
         token for token in REQUIRED_TOKENS if global_variables[token] is None
@@ -76,31 +76,32 @@ def check_tokens():
 
 def get_api_answer(timestamp):
     """Получение ответа от API."""
-    rq_pars = dict(
+    request_params = dict(
         url=ENDPOINT,
         headers=HEADERS,
         params={'from_date': timestamp}
     )
     try:
-        response = requests.get(**rq_pars)
+        response = requests.get(**request_params)
     except requests.exceptions.RequestException as error:
-        raise KeyError(API_CONNECTION_ERROR.format(
+        raise ConnectionError(API_CONNECTION_ERROR.format(
             detail_info=error,
-            headers=error.request.headers,
-            url=error.request.url)
-        )
+            **request_params
+        ))
     if response.status_code == HTTPStatus.OK:
         json_response = response.json()
         code = json_response.get('code')
         error = json_response.get('error')
         if code or error:
-            raise ValueError(API_ERROR.format(
-                code=code,
-                error=error,
-                **rq_pars
+            raise NameError(API_ERROR.format(
+                found_keys_values=json_response.items(),
+                **request_params
             ))
         return json_response
-    raise ValueError(API_ERROR2.format(code=response.status_code, **rq_pars))
+    raise ConnectionError(API_RESPONSE_ERROR.format(
+        code=response.status_code,
+        **request_params
+    ))
 
 
 def check_response(response):
@@ -110,7 +111,7 @@ def check_response(response):
 
     if 'homeworks' not in response:
         raise KeyError(
-            NO_HOMEWORKS_IN_RESPONSE_ERROR.format(keys=response.keys())
+            NO_HOMEWORKS_IN_RESPONSE_ERROR
         )
 
     homeworks = response['homeworks']
@@ -125,7 +126,7 @@ def parse_status(homework):
         key for key in ('homework_name', 'status') if key not in homework
     ]
     if missing_keys:
-        raise ValueError(HOMEWORK_MISSING_KEYS.format(keys=missing_keys))
+        raise KeyError(HOMEWORK_MISSING_KEYS.format(keys=missing_keys))
 
     status = homework['status']
     if status not in HOMEWORK_VERDICTS:
@@ -152,29 +153,35 @@ def send_message(bot, message):
 
 def main():
     """Основная логика работы бота."""
-    logger.setLevel(logging.DEBUG)
-    last_exception_error = ''
     check_tokens()
     bot = TeleBot(token=TELEGRAM_TOKEN)
+    #try:                              # Без Try/Except не проходят тесты
+    #    bot.get_me()                  # Проверяет, что токен телеграма верный
+    #except Exception as error:
+    #    logger.critical(error)
     timestamp = int(time.time())
+    api_answer = ''
+    message = ''
+    last_message = ''
     while True:
         try:
             api_answer = get_api_answer(timestamp)
             homeworks = check_response(api_answer)
             if homeworks:
                 message = parse_status(homeworks[0])
-                send_message(bot, message)
-                timestamp = api_answer.get('current_date', timestamp)
             else:
                 logger.debug(NO_NEW_STATUSES)
-            # Далее очищаем последнюю ошибку, если она не повторилась
-            last_exception_error = ''
         except Exception as error:
             message = EXCEPTION_TEXT.format(error=error)
             logger.error(message)
-            if str(error)[:100] != last_exception_error:
+
+        try:
+            if message and message != last_message:
                 send_message(bot, message)
-                last_exception_error = str(error)[:100]
+                timestamp = api_answer.get('current_date', timestamp)
+            last_message = message
+        except Exception:
+            pass
         time.sleep(RETRY_PERIOD)
 
 
@@ -182,13 +189,13 @@ if __name__ == '__main__':
     logging.basicConfig(
         format='%(asctime)s, %(levelname)s, %(funcName)s'
                ' - %(lineno)d, %(message)s',
-        level=logging.CRITICAL,
+        level=logging.DEBUG,
         handlers=[
             logging.StreamHandler(sys.stdout),
             RotatingFileHandler(
                 filename=__file__ + '.log',
-                maxBytes=50000000,
-                backupCount=5
+                maxBytes=5000000,
+                backupCount=3
             )
         ]
     )

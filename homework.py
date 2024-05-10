@@ -155,10 +155,6 @@ def main():
     """Основная логика работы бота."""
     check_tokens()
     bot = TeleBot(token=TELEGRAM_TOKEN)
-    #try:                              # Без Try/Except не проходят тесты
-    #    bot.get_me()                  # Проверяет, что токен телеграма верный
-    #except Exception as error:
-    #    logger.critical(error)
     timestamp = int(time.time())
     api_answer = ''
     message = ''

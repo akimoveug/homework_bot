@@ -35,14 +35,12 @@ CHECK_TOKENS_ERROR = ('Отсутствуют переменные окруже�
                       'Программа принудительно остановлена.')
 API_CONNECTION_ERROR = ('ошибка запроса к API: {detail_info}. URL: {url}, '
                         'HEADERS: {headers}, PARAMS: {params}')
-API_ERROR = (
-    'ошибка запроса к API, в ответе найдены ключи и их значения: '
-    '{found_keys_values}. URL: {url}, HEADERS: {headers}, PARAMS: {params}'
+API_RESPONSE_ERROR = (
+    'ошибка запроса к API. Ошибка {code}. Ключи и значения в ответе: '
+    '{found_keys_values} URL: {url}, HEADERS: {headers}, PARAMS: {params}'
 )
-API_RESPONSE_ERROR = ('API Практикума недоступно. Ошибка {code}. URL: {url}, '
-                      'HEADERS: {headers}, PARAMS: {params}')
 RESPONSE_TYPE_ERROR = 'в ответе пришел не словарь, а {type}'
-NO_HOMEWORKS_IN_RESPONSE_ERROR = 'в ответе отсутствует ключ homeworks.'
+NO_HOMEWORKS_IN_RESPONSE_ERROR = 'в ответе отсутствует ключ "homeworks".'
 HOMEWORKS_TYPE_ERROR = 'в ответе пришел не список, а {type}'
 NO_NEW_STATUSES = 'в ответе отсутствуют новые статусы'
 HOMEWORK_TYPE_ERROR = 'отдельная работа не в словаре, а в {type}'
@@ -67,9 +65,9 @@ def check_tokens():
         token for token in REQUIRED_TOKENS if global_variables[token] is None
     ]
     if tokens_with_none_value:
-        error_message = (CHECK_TOKENS_ERROR.format(
+        error_message = CHECK_TOKENS_ERROR.format(
             tokens=tokens_with_none_value
-        ))
+        )
         logger.critical(error_message)
         raise ValueError(error_message)
 
@@ -88,18 +86,12 @@ def get_api_answer(timestamp):
             detail_info=error,
             **request_params
         ))
+    json_response = response.json()
     if response.status_code == HTTPStatus.OK:
-        json_response = response.json()
-        code = json_response.get('code')
-        error = json_response.get('error')
-        if code or error:
-            raise NameError(API_ERROR.format(
-                found_keys_values=json_response.items(),
-                **request_params
-            ))
         return json_response
-    raise ConnectionError(API_RESPONSE_ERROR.format(
+    raise RuntimeError(API_RESPONSE_ERROR.format(
         code=response.status_code,
+        found_keys_values=json_response.items(),
         **request_params
     ))
 
@@ -114,7 +106,7 @@ def check_response(response):
             NO_HOMEWORKS_IN_RESPONSE_ERROR
         )
 
-    homeworks = response['homeworks']
+    homeworks = response.get('homeworks')
     if not isinstance(homeworks, list):
         raise TypeError(HOMEWORKS_TYPE_ERROR.format(type=type(homeworks)))
     return homeworks
@@ -128,7 +120,7 @@ def parse_status(homework):
     if missing_keys:
         raise KeyError(HOMEWORK_MISSING_KEYS.format(keys=missing_keys))
 
-    status = homework['status']
+    status = homework.get('status')
     if status not in HOMEWORK_VERDICTS:
         raise ValueError(
             UNEXPECTED_HOMEWORK_STATUS.format(status=status)
@@ -142,8 +134,9 @@ def parse_status(homework):
 def send_message(bot, message):
     """Отправка сообщения в Telegram."""
     try:
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+        bot_message = bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
         logger.debug(BOT_SEND_MESSAGE.format(message=message))
+        return bot_message
     except Exception as error:
         logger.error(
             BOT_SEND_MESSAGE_ERROR.format(message=message, error=error),
@@ -156,7 +149,7 @@ def main():
     check_tokens()
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    api_answer = ''
+    api_answer = {}
     message = ''
     last_message = ''
     while True:
@@ -171,13 +164,11 @@ def main():
             message = EXCEPTION_TEXT.format(error=error)
             logger.error(message)
 
-        try:
-            if message and message != last_message:
-                send_message(bot, message)
-                timestamp = api_answer.get('current_date', timestamp)
-            last_message = message
-        except Exception:
-            pass
+        if message and message != last_message:
+            if send_message(bot, message):
+                if message != EXCEPTION_TEXT.format(error=message):
+                    timestamp = api_answer.get('current_date', timestamp)
+                last_message = message
         time.sleep(RETRY_PERIOD)
 
 

@@ -30,6 +30,7 @@ HOMEWORK_VERDICTS = {
 }
 
 REQUIRED_TOKENS = ('TELEGRAM_TOKEN', 'PRACTICUM_TOKEN', 'TELEGRAM_CHAT_ID')
+API_ERROR_KEYS = ('code', 'error')
 
 CHECK_TOKENS_ERROR = ('Отсутствуют переменные окружения {tokens}. '
                       'Программа принудительно остановлена.')
@@ -38,6 +39,9 @@ API_CONNECTION_ERROR = ('ошибка запроса к API: {detail_info}. URL:
 API_RESPONSE_ERROR = (
     'ошибка запроса к API. Ошибка {code}. Ключи и значения в ответе: '
     '{found_keys_values} URL: {url}, HEADERS: {headers}, PARAMS: {params}'
+)
+API_KEYS_ERROR = (
+    'ошибка запроса к API. Ключи и значения в ответе: {keys_values}'
 )
 RESPONSE_TYPE_ERROR = 'в ответе пришел не словарь, а {type}'
 NO_HOMEWORKS_IN_RESPONSE_ERROR = 'в ответе отсутствует ключ "homeworks".'
@@ -86,13 +90,21 @@ def get_api_answer(timestamp):
             detail_info=error,
             **request_params
         ))
-    json_response = response.json()
+    try:
+        response_json = response.json()
+    except Exception:
+        raise RuntimeError(API_RESPONSE_ERROR.format(
+            code=response.status_code,
+            **request_params
+            ))
     if response.status_code == HTTPStatus.OK:
-        return json_response
-    raise RuntimeError(API_RESPONSE_ERROR.format(
-        code=response.status_code,
-        found_keys_values=json_response.items(),
-        **request_params
+        return response_json
+    raise RuntimeError(API_KEYS_ERROR.format(
+       keys_values={
+           key: item for key, item in response_json.items()
+           if key in API_ERROR_KEYS
+       },
+       **request_params
     ))
 
 
@@ -106,7 +118,7 @@ def check_response(response):
             NO_HOMEWORKS_IN_RESPONSE_ERROR
         )
 
-    homeworks = response.get('homeworks')
+    homeworks = response['homeworks']
     if not isinstance(homeworks, list):
         raise TypeError(HOMEWORKS_TYPE_ERROR.format(type=type(homeworks)))
     return homeworks
@@ -120,7 +132,7 @@ def parse_status(homework):
     if missing_keys:
         raise KeyError(HOMEWORK_MISSING_KEYS.format(keys=missing_keys))
 
-    status = homework.get('status')
+    status = homework['status']
     if status not in HOMEWORK_VERDICTS:
         raise ValueError(
             UNEXPECTED_HOMEWORK_STATUS.format(status=status)
@@ -133,15 +145,9 @@ def parse_status(homework):
 
 def send_message(bot, message):
     """Отправка сообщения в Telegram."""
-    try:
-        bot_message = bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
-        logger.debug(BOT_SEND_MESSAGE.format(message=message))
-        return bot_message
-    except Exception as error:
-        logger.error(
-            BOT_SEND_MESSAGE_ERROR.format(message=message, error=error),
-            exc_info=True
-        )
+    bot_message = bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+    logger.debug(BOT_SEND_MESSAGE.format(message=message))
+    return bot_message
 
 
 def main():
@@ -149,8 +155,6 @@ def main():
     check_tokens()
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    api_answer = {}
-    message = ''
     last_message = ''
     while True:
         try:
@@ -158,17 +162,19 @@ def main():
             homeworks = check_response(api_answer)
             if homeworks:
                 message = parse_status(homeworks[0])
+                if send_message(bot, message):
+                    timestamp = api_answer.get('current_date', timestamp)
             else:
                 logger.debug(NO_NEW_STATUSES)
         except Exception as error:
             message = EXCEPTION_TEXT.format(error=error)
             logger.error(message)
-
-        if message and message != last_message:
-            if send_message(bot, message):
-                if message != EXCEPTION_TEXT.format(error=message):
-                    timestamp = api_answer.get('current_date', timestamp)
-                last_message = message
+            if message != last_message:
+                try:
+                    if send_message(bot, message):
+                        last_message = message
+                except Exception:
+                    pass
         time.sleep(RETRY_PERIOD)
 
 

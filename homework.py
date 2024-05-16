@@ -83,6 +83,7 @@ def get_api_answer(timestamp):
         headers=HEADERS,
         params={'from_date': timestamp}
     )
+
     try:
         response = requests.get(**request_params)
     except requests.exceptions.RequestException as error:
@@ -90,6 +91,7 @@ def get_api_answer(timestamp):
             detail_info=error,
             **request_params
         ))
+
     try:
         response_json = response.json()
     except Exception:
@@ -97,6 +99,7 @@ def get_api_answer(timestamp):
             code=response.status_code,
             **request_params
             ))
+
     if response.status_code == HTTPStatus.OK:
         return response_json
     raise RuntimeError(API_KEYS_ERROR.format(

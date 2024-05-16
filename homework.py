@@ -98,16 +98,16 @@ def get_api_answer(timestamp):
         raise RuntimeError(API_RESPONSE_ERROR.format(
             code=response.status_code,
             **request_params
-            ))
+        ))
 
     if response.status_code == HTTPStatus.OK:
         return response_json
     raise RuntimeError(API_KEYS_ERROR.format(
-       keys_values={
-           key: item for key, item in response_json.items()
-           if key in API_ERROR_KEYS
-       },
-       **request_params
+        keys_values={
+            key: item for key, item in response_json.items()
+            if key in API_ERROR_KEYS
+        },
+        **request_params
     ))
 
 

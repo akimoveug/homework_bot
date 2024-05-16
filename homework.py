@@ -17,11 +17,9 @@ PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
-
 
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
@@ -41,7 +39,8 @@ API_RESPONSE_ERROR = (
     '{found_keys_values} URL: {url}, HEADERS: {headers}, PARAMS: {params}'
 )
 API_KEYS_ERROR = (
-    'ошибка запроса к API. Ключи и значения в ответе: {keys_values}'
+    'ошибка запроса к API. Ключи и значения в ответе: {keys_values}. '
+    'URL: {url}, HEADERS: {headers}, PARAMS: {params}'
 )
 RESPONSE_TYPE_ERROR = 'в ответе пришел не словарь, а {type}'
 NO_HOMEWORKS_IN_RESPONSE_ERROR = 'в ответе отсутствует ключ "homeworks".'
@@ -92,14 +91,7 @@ def get_api_answer(timestamp):
             **request_params
         ))
 
-    try:
-        response_json = response.json()
-    except Exception:
-        raise RuntimeError(API_RESPONSE_ERROR.format(
-            code=response.status_code,
-            **request_params
-        ))
-
+    response_json = response.json()
     if response.status_code == HTTPStatus.OK:
         return response_json
     raise RuntimeError(API_KEYS_ERROR.format(
@@ -148,9 +140,8 @@ def parse_status(homework):
 
 def send_message(bot, message):
     """Отправка сообщения в Telegram."""
-    bot_message = bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
     logger.debug(BOT_SEND_MESSAGE.format(message=message))
-    return bot_message
 
 
 def main():
@@ -165,8 +156,8 @@ def main():
             homeworks = check_response(api_answer)
             if homeworks:
                 message = parse_status(homeworks[0])
-                if send_message(bot, message):
-                    timestamp = api_answer.get('current_date', timestamp)
+                send_message(bot, message)
+                timestamp = api_answer.get('current_date', timestamp)
             else:
                 logger.debug(NO_NEW_STATUSES)
         except Exception as error:
@@ -174,10 +165,10 @@ def main():
             logger.error(message)
             if message != last_message:
                 try:
-                    if send_message(bot, message):
-                        last_message = message
-                except Exception:
-                    pass
+                    send_message(bot, message)
+                    last_message = message
+                except Exception as error:
+                    logger.error(EXCEPTION_TEXT.format(error=error))
         time.sleep(RETRY_PERIOD)
 
 
